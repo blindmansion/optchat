@@ -1,0 +1,20 @@
+{
+  "name": "optschat",
+  "module": "src/chat.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "chat": "bun src/chat.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.83",
+    "ai": "^7.0.127",
+    "zod": "^4.6.5"
+  }
+}
