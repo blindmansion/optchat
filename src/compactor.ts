@@ -15,12 +15,11 @@ const KINDS = {
 
 const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
 
-const dim = (s: string) => console.error(`\x1b[2m${s}\x1b[0m`);
-
 // Builds tree nodes in the background, in the strict order of spec §4.1.
 export class Compactor {
   busy = new Set<string>();
   failed = new Set<string>();
+  quiet = false; // no progress or failure lines, e.g. under a prompt
   private idlers: (() => void)[] = [];
 
   constructor(private mem: Memory) {}
@@ -72,7 +71,7 @@ export class Compactor {
               this.pump();
             },
             (err) => {
-              if (!this.failed.has(k)) console.error(`compactor: node ${l}:${i} failed, retrying:`, err?.message ?? err);
+              if (!this.failed.has(k) && !this.quiet) console.error(`compactor: node ${l}:${i} failed, retrying:`, err?.message ?? err);
               this.failed.add(k);
               setTimeout(() => {
                 this.busy.delete(k);
@@ -143,7 +142,7 @@ export class Compactor {
     }
     const best = tries.reduce((a, b) => (bytes(b) < bytes(a) ? b : a));
     m.save(l, i, best);
-    dim(`  ~ ${i * n}+${n} summarized: ${bytes(best)} B${tries.length > 1 ? `, ${tries.length} tries` : ""}`);
+    if (!this.quiet) console.error(`\x1b[2m  ~ ${i * n}+${n} summarized: ${bytes(best)} B${tries.length > 1 ? `, ${tries.length} tries` : ""}\x1b[0m`);
   }
 
   // Resolves true once every view part is a built summary, false if aborted.

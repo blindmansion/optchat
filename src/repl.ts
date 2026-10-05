@@ -8,13 +8,18 @@ const HELP = [
   `  ${"/help".padEnd(16)}this list`,
   `  ${"/exit".padEnd(16)}quit (or Ctrl-D)`,
   "anything else is a message; lines pasted together are one message.",
-  "Ctrl-C stops what is running: the wait for the view, the turn, then the compactor.",
+  "Ctrl-C stops the turn; the compactor works in the background.",
 ].join("\n");
 
-// The one-shot loop, many times over in one process. At the prompt readline has
-// the terminal in raw mode; while working it is paused in cooked mode, so Ctrl-C
-// is a real SIGINT that reaches the session straight away.
+// Turns one after another in one process. A turn waits only for the agent: the
+// compactor works in the background, silent so it can't break the agent's text.
+// At the prompt readline has the terminal in raw mode; while working it is
+// paused in cooked mode, so Ctrl-C is a real SIGINT that reaches the session
+// straight away.
 export function repl(s: Session, exit: (code: number) => never) {
+  s.wait = false;
+  s.comp.quiet = true;
+  s.comp.pump();
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> ", historySize: 1000 });
   let busy = false;
   let closing = false;
@@ -73,7 +78,10 @@ export function repl(s: Session, exit: (code: number) => never) {
     rl.on("close", async () => {
       closing = true;
       console.error();
-      if (s.comp.busy.size) await s.drain(); // Ctrl-C here quits at once
+      if (s.comp.busy.size) {
+        console.error(dim("finishing summaries; Ctrl-C to quit now (they resume next run)"));
+        await s.drain();
+      }
       resolve(0);
     });
   });

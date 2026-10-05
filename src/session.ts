@@ -37,6 +37,7 @@ export const COMMANDS: Command[] = [
 export class Session {
   comp: Compactor;
   phase: "idle" | "settle" | "turn" | "drain" = "idle";
+  wait = true; // settle the view before a turn and drain the compactor after it
   private abort?: AbortController;
 
   constructor(public mem: Memory) {
@@ -74,11 +75,12 @@ export class Session {
 
   // Settle the view, answer, compact. Stopped while settling, the message stays
   // in the log, unanswered, and this returns false; stopped during the turn,
-  // everything so far is already logged.
+  // everything so far is already logged. Without wait, just the turn: view
+  // lines not summarized yet go to the model as pending.
   async send(text: string) {
     let signal = this.enter("settle");
-    if (!this.mem.settled()) console.error(dim("waiting for the compactor..."));
-    if (!(await this.comp.settle(signal))) {
+    if (this.wait && !this.mem.settled()) console.error(dim("waiting for the compactor..."));
+    if (this.wait && !(await this.comp.settle(signal))) {
       this.mem.log("user", text);
       console.error("\ncancelled; message logged, unanswered");
       this.enter("idle");
@@ -91,7 +93,8 @@ export class Session {
       if (!signal!.aborted) console.error("turn failed:", e instanceof Error ? e.message : e);
     }
     if (signal!.aborted) console.error();
-    await this.drain();
+    if (this.wait) await this.drain();
+    else this.enter("idle");
     return true;
   }
 
