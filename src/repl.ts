@@ -16,7 +16,7 @@ const HELP = [
 // At the prompt readline has the terminal in raw mode; while working it is
 // paused in cooked mode, so Ctrl-C is a real SIGINT that reaches the session
 // straight away.
-export function repl(s: Session, exit: (code: number) => never) {
+export function repl(s: Session, exit: (code: number) => Promise<never>) {
   s.wait = false;
   s.comp.quiet = true;
   s.comp.pump();

@@ -7,6 +7,7 @@ import { BREAKPOINTS, DIR, EFFORT, MODEL, cap } from "./config";
 import type { Compactor } from "./compactor";
 import type { Memory } from "./memory";
 import { MASTER, VIEW_DOC } from "./prompts";
+import { agent } from "./telemetry";
 
 const out = (s: string) => process.stdout.write(s);
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -34,7 +35,8 @@ function tools(mem: Memory) {
 }
 
 // One fresh model call: [system] [view] [new message], logging everything it does.
-export async function turn(mem: Memory, comp: Compactor, text: string, signal?: AbortSignal) {
+// Returns the reply, for the trace.
+async function run(mem: Memory, comp: Compactor, text: string, signal?: AbortSignal) {
   const view = mem.render(); // before the new message is logged
   mem.log("user", text);
   comp.pump();
@@ -62,9 +64,11 @@ export async function turn(mem: Memory, comp: Compactor, text: string, signal?: 
         promptCacheKey: "optchat",
       },
     },
+    telemetry: { functionId: "optchat" },
   });
 
   const texts = new Map<string, string>();
+  const reply: string[] = [];
   for await (const part of result.fullStream) {
     switch (part.type) {
       case "reasoning-start": // shown, never logged
@@ -83,7 +87,7 @@ export async function turn(mem: Memory, comp: Compactor, text: string, signal?: 
       case "text-end": {
         out("\n");
         const t = texts.get(part.id)?.trim();
-        if (t) mem.log("talk", t), comp.pump();
+        if (t) mem.log("talk", t), comp.pump(), reply.push(t);
         break;
       }
       case "tool-call": {
@@ -116,4 +120,12 @@ export async function turn(mem: Memory, comp: Compactor, text: string, signal?: 
         throw part.error;
     }
   }
+  return reply.join("\n\n");
 }
+
+// In Phoenix: one "optchat" trace per turn, input the user's message, output the reply.
+export const turn = agent("optchat", run, {
+  input: ([, , text]) => text,
+  output: (reply) => reply,
+  metadata: ([mem]) => ({ message: mem.T }), // id the user's message gets in the log
+});

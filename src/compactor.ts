@@ -3,6 +3,7 @@ import { generateText, type ModelMessage } from "ai";
 import { COMPACT_EFFORT, COMPACT_MODEL, JOBS, NODE, RETRY, TRIES, bytes, cutBytes } from "./config";
 import { flat, type Memory } from "./memory";
 import { COMPACT_SYSTEM, WORDS } from "./prompts";
+import { agent } from "./telemetry";
 
 // Named in the step so the model tags the item right (it tagged poems by OptChat as "user").
 const KINDS = {
@@ -14,6 +15,7 @@ const KINDS = {
 };
 
 const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
+const size = (t: string) => `${bytes(t)} bytes, ${words(t)} words`;
 
 // Builds tree nodes in the background, in the strict order of spec §4.1.
 export class Compactor {
@@ -92,7 +94,6 @@ export class Compactor {
     // Deviation: sizes in words as well as bytes, since gpt-5.4-mini can't
     // count bytes and overshot merges by 50% even after every retry.
     const limit = `at most ${NODE} bytes (about ${WORDS} words)`;
-    const size = (t: string) => `${bytes(t)} bytes, ${words(t)} words`;
     let step: string;
     if (l === 0) {
       const t = `${msg.kind}: ${msg.text}`;
@@ -101,48 +102,9 @@ export class Compactor {
       const t = `${flat(m.node(l - 1, 2 * i)!)}\n${flat(m.node(l - 1, 2 * i + 1)!)}`;
       step = `Merge these two lines (${size(t)} together) into one line, ${limit}:\n${t}`;
     }
-    const context = m.context(l === 0 ? i : (i + 1) * n);
-    const tries: string[] = [];
-    for (;;) {
-      // Deviation from the spec: each retry is a fresh request with the last try
-      // attached, not a follow-up turn. In a follow-up, gpt-5.4-mini summarized the
-      // size feedback as if it were a chat message, or just returned the cut line.
-      const last = tries.at(-1);
-      const retry = last
-        ? `\n\nYour last try was ${size(last)}: too long, cut about ${Math.max(5, words(last) - WORDS)} words. ` +
-          `Here it is cut at the limit:\n${cutBytes(last, NODE)}| ← LIMIT\n` +
-          `Write the whole line again so it fits: shrink the wording and the minor items, don't just cut the end.`
-        : "";
-      const messages: ModelMessage[] = [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: context },
-            { type: "text", text: `${step}${retry}` },
-          ],
-        },
-      ];
-      const r = await generateText({
-        model: openai(COMPACT_MODEL),
-        instructions: COMPACT_SYSTEM,
-        messages,
-        providerOptions: {
-          openai: {
-            store: false,
-            reasoningEffort: COMPACT_EFFORT,
-            reasoningSummary: null,
-            promptCacheKey: "optchat-compact",
-          },
-        },
-      });
-      const line = r.text.trim();
-      if (!line) throw new Error("empty reply");
-      tries.push(line);
-      if (bytes(line) <= NODE || tries.length >= TRIES) break;
-    }
-    const best = tries.reduce((a, b) => (bytes(b) < bytes(a) ? b : a));
+    const { best, tries } = await summarize(l, i, step, m.context(l === 0 ? i : (i + 1) * n));
     m.save(l, i, best);
-    if (!this.quiet) console.error(`\x1b[2m  ~ ${i * n}+${n} summarized: ${bytes(best)} B${tries.length > 1 ? `, ${tries.length} tries` : ""}\x1b[0m`);
+    if (!this.quiet) console.error(`\x1b[2m  ~ ${i * n}+${n} summarized: ${bytes(best)} B${tries > 1 ? `, ${tries} tries` : ""}\x1b[0m`);
   }
 
   // Resolves true once every view part is a built summary, false if aborted.
@@ -172,3 +134,56 @@ export class Compactor {
     });
   }
 }
+
+// The model calls for node l:i: step is the job, context what the chat says
+// around it. Gives back the shortest try.
+async function run(l: number, i: number, step: string, context: string) {
+  const tries: string[] = [];
+  for (;;) {
+    // Deviation from the spec: each retry is a fresh request with the last try
+    // attached, not a follow-up turn. In a follow-up, gpt-5.4-mini summarized the
+    // size feedback as if it were a chat message, or just returned the cut line.
+    const last = tries.at(-1);
+    const retry = last
+      ? `\n\nYour last try was ${size(last)}: too long, cut about ${Math.max(5, words(last) - WORDS)} words. ` +
+        `Here it is cut at the limit:\n${cutBytes(last, NODE)}| ← LIMIT\n` +
+        `Write the whole line again so it fits: shrink the wording and the minor items, don't just cut the end.`
+      : "";
+    const messages: ModelMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: context },
+          { type: "text", text: `${step}${retry}` },
+        ],
+      },
+    ];
+    const r = await generateText({
+      model: openai(COMPACT_MODEL),
+      instructions: COMPACT_SYSTEM,
+      messages,
+      providerOptions: {
+        openai: {
+          store: false,
+          reasoningEffort: COMPACT_EFFORT,
+          reasoningSummary: null,
+          promptCacheKey: "optchat-compact",
+        },
+      },
+      telemetry: { functionId: "compactor" },
+    });
+    const line = r.text.trim();
+    if (!line) throw new Error("empty reply");
+    tries.push(line);
+    if (bytes(line) <= NODE || tries.length >= TRIES) break;
+  }
+  return { best: tries.reduce((a, b) => (bytes(b) < bytes(a) ? b : a)), tries: tries.length };
+}
+
+// In Phoenix: one "compactor" trace per node built, input the job, output the
+// line kept; each try is a model call inside it.
+const summarize = agent("compactor", run, {
+  input: ([, , step]) => step,
+  output: (r) => r.best,
+  metadata: ([l, i]) => ({ node: `${l}:${i}`, messages: `${i * 2 ** l}+${2 ** l}` }),
+});
