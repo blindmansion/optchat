@@ -1,5 +1,5 @@
 {
-  "name": "optschat",
+  "name": "optchat",
   "module": "src/chat.ts",
   "type": "module",
   "private": true,

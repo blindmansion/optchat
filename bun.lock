@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "optschat",
+      "name": "optchat",
       "dependencies": {
         "@ai-sdk/openai": "^4.0.83",
         "ai": "^7.0.128",
